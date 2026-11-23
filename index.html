@@ -63,12 +63,13 @@ function parse(buf){const ws=XLSX.read(buf,{type:'array'});const rows=XLSX.utils
 async function refresh(){const a=await sb.from('requests').select('*').order('created_at',{ascending:false}),b=await sb.from('bodega_status').select('*');
  reqs={};(a.data||[]).forEach(r=>reqs[r.id]=r);sm={};(b.data||[]).forEach(s=>sm[s.request_id+'__'+s.bodega]=s)}
 async function loadMe(){const {data:{session}}=await sb.auth.getSession();if(!session)return;
- const {data}=await sb.from('profiles').select('role,bodega').eq('id',session.user.id).single();
- if(data){S.me={role:data.role,id:data.role==='admin'?'admin':data.bodega};await refresh()}}
+ const {data,error}=await sb.from('profiles').select('role,bodega').eq('id',session.user.id).single();
+ if(error)S.err=error.message;if(data){S.me={role:data.role,id:data.role==='admin'?'admin':data.bodega};await refresh()}}
 async function login(){const u=$('#us').value.trim(),{error}=await sb.auth.signInWithPassword({email:mail(u),password:$('#pw').value});
- if(error)return $('#err').textContent='Usuario o clave incorrectos';await loadMe();render()}
+ if(error)return $('#err').textContent=error.message==='Invalid login credentials'?'Usuario o clave incorrectos':'Error de Supabase: '+error.message;
+ await loadMe();if(!S.me){await sb.auth.signOut();return $('#err').textContent='Entró, pero no tiene perfil'+(S.err?': '+S.err:'. Falta ejecutar usuarios.sql')}render()}
 async function logout(){await sb.auth.signOut();S.me=S.fill=S.sel=null;render()}
-function vLogin(){return`<div class="stage"><div class="card tilt login"><div class="badge"><img src="${LOGO}" alt="Nexocorp"></div><h1>Portal de Inventarios</h1><p class="m">Ingresa con tu usuario de bodega</p><input id="us" placeholder="Usuario (ej. B301 o admin)" autocapitalize="off"><input id="pw" type="password" placeholder="Contraseña"><button class="btn" onclick="login()">Ingresar</button><div id="err" class="err"></div></div></div>`}
+function vLogin(){return`<div class="stage"><div class="card tilt login"><div class="badge"><img src="${LOGO}" alt="Nexocorp"></div><h1>Portal de Inventarios</h1><p class="m">Ingresa con tu usuario de bodega</p><input id="us" placeholder="Usuario (ej. B301 o admin)" autocapitalize="off"><input id="pw" type="password" placeholder="Contraseña"><button class="btn" onclick="login()">Ingresar</button><div id="err" class="err">${CFG.url.includes("TU-PROYECTO")?"Falta poner tu URL y anon key en config.js":""}</div></div></div>`}
 const head=()=>`<div class="top"><img class="ico" src="${ICON}" alt=""><h2>Portal de Inventarios · ${S.me.role==='admin'?'Administrador':S.me.id}</h2><button class="btn g" onclick="logout()">Salir</button></div>`;
 function stats(rid){const s={sent:0,prog:0,pend:0};BODS.forEach(b=>{const m=sm[rid+'__'+b];if(!m)return;m.sent?s.sent++:m.filled>0?s.prog++:s.pend++});return s}
 function vAdmin(){let h=head()+`<div class="row"><button class="btn ${S.tab==='d'?'':'g'}" onclick="S.tab='d';S.sel=null;render()">Dashboard</button><button class="btn ${S.tab==='u'?'':'g'}" onclick="S.tab='u';render()">Claves</button></div>`;
