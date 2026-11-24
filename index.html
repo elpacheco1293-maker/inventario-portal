@@ -95,12 +95,13 @@ function vLogin(){const T={'far': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgA
 <button class="btn lgBtn" onclick="login()">Ingresar al portal →</button><div id="err" class="err">${CFG.url.includes("TU-PROYECTO")?"Falta poner tu URL y anon key en config.js":""}</div></div><div class="lgFt">© 2026 NEXOCORP</div></div></div>`}
 const head=()=>`<div class="top"><img class="ico" src="${ICON}" alt=""><h2>Portal de Inventarios · ${S.me.role==='admin'?'Administrador':S.me.id}</h2><button class="btn g" onclick="logout()">Salir</button></div>`;
 function stats(rid){const s={sent:0,prog:0,pend:0};BODS.forEach(b=>{const m=sm[rid+'__'+b];if(!m)return;m.sent?s.sent++:m.filled>0?s.prog++:s.pend++});return s}
-function vAdmin(){let h=head()+`<div class="row"><button class="btn ${S.tab==='d'?'':'g'}" onclick="S.tab='d';S.sel=null;render()">Dashboard</button><button class="btn ${S.tab==='u'?'':'g'}" onclick="S.tab='u';render()">Claves</button></div>`;
- if(S.tab==='u')return h+vUsers();if(S.sel&&reqs[S.sel])return h+vDetail();
- h+=`<div class="card" style="margin-bottom:18px"><h3>Nueva solicitud</h3><div class="row"><input id="nt" placeholder="Título (ej. Inventario cíclico diciembre)"><input id="nd" type="datetime-local"></div><input id="nf" type="file" accept=".xls,.xlsx"><p class="m" style="font-size:.85rem">Se cargan las ${BODS.length} bodegas; las que no están en el Excel entran con sistema 0.</p><button class="btn" onclick="create()">Crear solicitud</button> <span id="msg" class="m"></span></div><div class="grid stage">`;
+function vList(){let h='';
  const ids=Object.keys(reqs);if(!ids.length)h+='<p class="m">Aún no hay solicitudes.</p>';
  for(const id of ids){const r=reqs[id],s=stats(id);h+=`<div class="card tilt click" onclick="S.sel='${id}';S.flt=null;S.open=false;render()">${pill(r)}<h3>${esc(r.title)}</h3><p class="m">Cierra: ${fd(r.deadline)}</p><div class="row" style="flex-wrap:nowrap">${donut(id,110)}<div>${legend(id)}</div></div></div>`}
- return h+'</div>'}
+ return h}
+function vAdmin(){let h=head()+`<div class="row"><button class="btn ${S.tab==='d'?'':'g'}" onclick="S.tab='d';S.sel=null;render()">Dashboard</button><button class="btn ${S.tab==='u'?'':'g'}" onclick="S.tab='u';render()">Claves</button></div>`;
+ if(S.tab==='u')return h+vUsers();if(S.sel&&reqs[S.sel])return h+vDetail();
+ h+=`<div class="card" style="margin-bottom:18px"><h3>Nueva solicitud</h3><div class="row"><input id="nt" placeholder="Título (ej. Inventario cíclico diciembre)"><input id="nd" type="datetime-local"></div><input id="nf" type="file" accept=".xls,.xlsx"><p class="m" style="font-size:.85rem">Se cargan las ${BODS.length} bodegas; las que no están en el Excel entran con sistema 0.</p><button class="btn" onclick="create()">Crear solicitud</button> <span id="msg" class="m"></span></div><div id="lst" class="grid stage">${vList()}</div>`;return h}
 const COL={s:'#22c58b',p:'#f5b942',n:'#ff6b81'},NM={s:'Enviadas',p:'En curso',n:'Pendientes'};
 function groups(rid){const g={s:[],p:[],n:[]};BODS.forEach(b=>{const m=sm[rid+'__'+b];if(!m)return;(m.sent?g.s:m.filled>0?g.p:g.n).push(b)});return g}
 const tipOf=(g,k)=>`${NM[k]} (${g[k].length})${g[k].length?': '+g[k].join(', '):''}`;
@@ -175,6 +176,7 @@ document.addEventListener('mousemove',e=>{const c=$('.lgC');if(!c)return;c.style
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&$('#us')&&!S.me)login()});
 document.addEventListener('mousemove',e=>{const t=e.target.closest&&e.target.closest('.tilt');if(!t)return;const b=t.getBoundingClientRect(),x=(e.clientX-b.left)/b.width-.5,y=(e.clientY-b.top)/b.height-.5;t.style.transform=`rotateX(${-y*10}deg) rotateY(${x*12}deg) translateZ(10px)`});
 document.addEventListener('mouseout',e=>{const t=e.target.closest&&e.target.closest('.tilt');if(t&&!t.contains(e.relatedTarget))t.style.transform=''});
-setInterval(async()=>{if(S.me&&!S.fill){await refresh();render()}},20000);
+setInterval(async()=>{if(!S.me||S.fill)return;await refresh();const l=$('#lst');if(l){l.innerHTML=vList();return}
+ const a=document.activeElement,busy=(a&&a.tagName==='INPUT')||[...document.querySelectorAll('#app input')].some(i=>i.value||(i.files&&i.files.length));if(!busy)render()},20000);
 loadMe().then(render);
 </script></body></html>
