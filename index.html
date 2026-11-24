@@ -68,10 +68,13 @@ function parse(buf){const ws=XLSX.read(buf,{type:'array'});const rows=XLSX.utils
  const cB=ix('bodega'),cA=ix('articulo'),cD=H.findIndex(h=>h.startsWith('descripci')&&h.includes('art')),cQ=ix('on hand'),cU=ix('uom primaria'),cN=H.findIndex(h=>h.startsWith('descripci')&&!h.includes('art'));
  if([cB,cA,cD,cQ,cU].some(i=>i<0))throw 'Faltan columnas: Bodega, Articulo, Descripción Articulo, On Hand, UOM Primaria';
  const arts={},sys={},names={};
+ const seen=new Set(),ign=new Set();
  for(const r of rows.slice(hi+1)){const b=String(r[cB]).trim(),a=String(r[cA]).trim();if(!b||!a)continue;
+  if(!BODS.includes(b)){ign.add(b);continue}seen.add(b);
   if(!arts[a])arts[a]=[a,String(r[cD]).trim(),ab(r[cU])];
-  if(BODS.includes(b)){(sys[b]=sys[b]||{})[a]=(sys[b][a]||0)+(Number(r[cQ])||0);if(cN>=0&&!names[b])names[b]=String(r[cN]).trim()}}
- return{arts:Object.values(arts).sort((x,y)=>x[1].localeCompare(y[1])),sys,names}}
+  (sys[b]=sys[b]||{})[a]=(sys[b][a]||0)+(Number(r[cQ])||0);if(cN>=0&&!names[b])names[b]=String(r[cN]).trim()}
+ if(!seen.size)throw 'El archivo no trae ninguna de tus '+BODS.length+' bodegas';
+ return{arts:Object.values(arts).sort((x,y)=>x[1].localeCompare(y[1])),sys,names,found:[...seen],ignored:ign.size}}
 async function refresh(){const a=await sb.from('requests').select('*').order('created_at',{ascending:false}),b=await sb.from('bodega_status').select('*');
  reqs={};(a.data||[]).forEach(r=>reqs[r.id]=r);sm={};(b.data||[]).forEach(s=>sm[s.request_id+'__'+s.bodega]=s)}
 async function loadMe(){const {data:{session}}=await sb.auth.getSession();if(!session)return;
@@ -134,13 +137,14 @@ async function setDl(){const t=new Date($('#nd').value);if(isNaN(t))return toast
 async function del(){if(!confirm('¿Eliminar esta solicitud y TODOS sus datos? No se puede deshacer.'))return;toast('Eliminando…');
  const {error}=await sb.rpc('delete_request',{p_req:S.sel});if(error)return toast('Error: '+error.message);S.sel=null;await refresh();render();toast('Solicitud eliminada y espacio liberado')}
 async function create(){const t=$('#nt').value.trim(),d=new Date($('#nd').value),f=$('#nf').files[0];if(!t||isNaN(d)||!f)return toast('Completa título, fecha límite y archivo');
- const msg=x=>$('#msg').textContent=x;let rid;try{const P=parse(await f.arrayBuffer());
+ const msg=x=>$('#msg').textContent=x;let rid;try{const {data:u,error:ue}=await sb.auth.getUser();if(ue||!u.user){await logout();return toast('Tu sesión venció. Ingresa de nuevo')}
+ const P=parse(await f.arrayBuffer());
  const {data:r,error}=await sb.from('requests').insert({title:t,deadline:d.toISOString(),names:P.names}).select().single();if(error)throw error;rid=r.id;
  for(let i=0;i<P.arts.length;i+=1000){const {error}=await sb.from('articles').insert(P.arts.slice(i,i+1000).map(a=>({request_id:rid,codigo:a[0],descripcion:a[1],uom:a[2]})));if(error)throw error;msg(`Artículos ${Math.min(i+1000,P.arts.length)}/${P.arts.length}`)}
  msg('Creando bodegas…');let e=(await sb.rpc('seed_request',{p_req:rid,p_bods:BODS})).error;if(e)throw e;
  const sys=[];for(const b in P.sys)for(const a in P.sys[b])if(P.sys[b][a]!==0)sys.push([b,a,P.sys[b][a]]);
  for(let i=0;i<sys.length;i+=4000){e=(await sb.rpc('apply_sys',{p_req:rid,p_sys:sys.slice(i,i+4000)})).error;if(e)throw e;msg(`Cantidades ${Math.min(i+4000,sys.length)}/${sys.length}`)}
- await refresh();S.sel=rid;render();toast(`Solicitud creada: ${P.arts.length} artículos`)}catch(e){if(rid)await sb.rpc('delete_request',{p_req:rid});msg('Error: '+(e.message||e))}}
+ await refresh();S.sel=rid;render();toast(`Solicitud creada: ${P.arts.length} artículos · ${P.found.length} bodegas tomadas del archivo, ${BODS.length-P.found.length} con sistema 0, ${P.ignored} ajenas ignoradas`)}catch(e){if(rid)await sb.rpc('delete_request',{p_req:rid});msg('Error: '+(e.message||e)+(String(e.message).includes('row-level')?' · Cierra sesión y entra de nuevo como admin':''))}}
 async function page(q){const out=[];for(let i=0;;i+=1000){const {data,error}=await q().range(i,i+999);if(error)throw error;out.push(...data);if(data.length<1000)return out}}
 async function exportX(){const id=S.sel,r=reqs[id];toast('Preparando Excel…');try{
  const d=await page(()=>sb.from('counts').select('bodega,sistema,fisico,article_id,articles!inner(codigo,descripcion,uom,request_id)').eq('articles.request_id',id).order('bodega').order('article_id'));
@@ -151,23 +155,26 @@ function vBod(){let h=head()+'<div class="grid stage">';const ids=Object.keys(re
  if(!ids.length)h+='<p class="m">No tienes solicitudes asignadas.</p>';
  for(const id of ids){const r=reqs[id],m=sm[id+'__'+S.me.id];h+=`<div class="card tilt click" onclick="openFill('${id}','${S.me.id}')">${pill(r)} ${m.sent?'<span class="pill open">Enviada</span>':''}<h3>${esc(r.title)}</h3><p class="m">Cierra: ${fd(r.deadline)}</p><div class="bar"><i style="width:${m.filled/(m.total||1)*100}%"></i></div><p style="margin:0">${m.filled}/${m.total} artículos llenos</p></div>`}
  return h+'</div>'}
-async function openFill(rid,bod){S.fill={rid,bod,ro:S.me.role==='admin',rows:null,dirty:new Set()};S.q='';S.f='all';S.lim=200;render();
+async function openFill(rid,bod){S.fill={rid,bod,ro:false,adm:S.me.role==='admin',rows:null,dirty:new Set()};S.q='';S.f='all';S.lim=200;render();
  try{const d=await page(()=>sb.from('counts').select('article_id,sistema,fisico,articles!inner(codigo,descripcion,uom,request_id)').eq('bodega',bod).eq('articles.request_id',rid).order('article_id'));
  S.fill.rows=d.map(x=>[x.articles.codigo,x.articles.descripcion,Number(x.sistema),x.articles.uom,x.fisico==null?null:Number(x.fisico),x.article_id]);render()}catch(e){toast('Error cargando artículos')}}
-const sentOf=f=>!!(sm[f.rid+'__'+f.bod]||{}).sent,locked=()=>S.fill.ro||stOf(reqs[S.fill.rid])!=='open'||sentOf(S.fill);
-function vFill(){const f=S.fill,r=reqs[f.rid];return`<button class="btn g" onclick="S.fill=null;render()">← Volver</button><div class="card" style="margin-bottom:14px">${pill(r)} <b>${esc(r.title)}</b> · <b>${f.bod}</b> <span class="m">${esc((r.names||{})[f.bod]||'')}</span><p class="m" style="margin:4px 0">Cierra: ${fd(r.deadline)}${f.ro?' · Vista de solo lectura':''}</p>${f.rows?`<div class="bar"><i id="pb"></i></div><div id="cnt"></div><div class="row"><input placeholder="Buscar artículo o descripción" oninput="S.q=this.value;S.lim=200;paint()"><select onchange="S.f=this.value;S.lim=200;paint()"><option value="all">Todos</option><option value="pend">Solo pendientes</option><option value="dif">Solo diferencias</option></select></div>${f.ro?'':sentOf(f)?'<p class="pill open">Inventario enviado · ya no se puede modificar</p>':'<button class="btn g" onclick="save(false)">Guardar avance</button><button class="btn" onclick="save(true)">Enviar inventario</button>'}`:'<p class="m">Cargando artículos…</p>'}</div>${f.rows?'<div id="tb" class="tw"></div>':''}`}
+const sentOf=f=>!!(sm[f.rid+'__'+f.bod]||{}).sent,locked=()=>S.fill.adm?false:stOf(reqs[S.fill.rid])!=='open'||sentOf(S.fill);
+function vFill(){const f=S.fill,r=reqs[f.rid];return`<button class="btn g" onclick="S.fill=null;render()">← Volver</button><div class="card" style="margin-bottom:14px">${pill(r)} <b>${esc(r.title)}</b> · <b>${f.bod}</b> <span class="m">${esc((r.names||{})[f.bod]||'')}</span><p class="m" style="margin:4px 0">Cierra: ${fd(r.deadline)}${f.adm?' · Modo administrador: puedes corregir':''}</p>${f.rows?`<div class="bar"><i id="pb"></i></div><div id="cnt"></div><div class="row"><input placeholder="Buscar artículo o descripción" oninput="S.q=this.value;S.lim=200;paint()"><select onchange="S.f=this.value;S.lim=200;paint()"><option value="all">Todos</option><option value="pend">Solo pendientes</option><option value="dif">Solo diferencias</option></select></div>${f.adm?admBtns(f):sentOf(f)?'<p class="pill open">Inventario enviado · ya no se puede modificar</p>':'<button class="btn g" onclick="save(false)">Guardar avance</button><button class="btn" onclick="save(true)">Enviar inventario</button>'}`:'<p class="m">Cargando artículos…</p>'}</div>${f.rows?'<div id="tb" class="tw"></div>':''}`}
 function cnt(){const f=S.fill,n=f.rows.filter(r=>r[4]!==null).length;$('#cnt').innerHTML=`<b>${n}</b> de ${f.rows.length} llenos`;$('#pb').style.width=n/(f.rows.length||1)*100+'%'}
-function paint(){const f=S.fill;if(!f||!f.rows)return;const q=S.q.toLowerCase(),L=locked();let n=0,h='<table><tr><th>Artículo</th><th>Descripción</th><th>UOM</th><th>Sistema</th><th>Físico</th>'+(f.ro?'<th>Dif.</th>':'')+'</tr>',more=false;
+function paint(){const f=S.fill;if(!f||!f.rows)return;const q=S.q.toLowerCase(),L=locked();let n=0,h='<table><tr><th>Artículo</th><th>Descripción</th><th>UOM</th><th>Sistema</th><th>Físico</th>'+(f.adm?'<th>Dif.</th>':'')+'</tr>',more=false;
  f.rows.forEach((r,i)=>{if(S.f==='pend'&&r[4]!==null)return;if(S.f==='dif'&&!(r[4]!==null&&r[4]!==r[2]))return;if(q&&!(r[0]+' '+r[1]).toLowerCase().includes(q))return;if(n++>=S.lim){more=true;return}
-  h+=`<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[3])}</td><td class="n">${r[2]}</td><td><input type="number" min="0" step="any" inputmode="decimal" value="${r[4]??''}" ${L?'disabled':''} oninput="setPh(${i},this.value)"></td>${f.ro?dif(r):''}</tr>`});
+  h+=`<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[3])}</td><td class="n">${r[2]}</td><td><input type="number" min="0" step="any" inputmode="decimal" value="${r[4]??''}" ${L?'disabled':''} oninput="setPh(${i},this.value)"></td>${f.adm?dif(r):''}</tr>`});
  $('#tb').innerHTML=h+'</table>'+(more?'<button class="btn g" onclick="S.lim+=300;paint()">Mostrar más</button>':'');cnt()}
 const dif=r=>{if(r[4]==null)return'<td></td>';const d=+(r[4]-r[2]).toFixed(3);return`<td class="n" style="color:${d>0?'#4cc9f0':d<0?'#ff9f43':'inherit'}">${d>0?'+':''}${d}</td>`};
 function setPh(i,v){const r=S.fill.rows[i];r[4]=v===''?null:Math.max(0,Number(v));S.fill.dirty.add(i);cnt()}
+const call=(f,rows,send)=>f.adm?sb.rpc('admin_save_counts',{p_req:f.rid,p_bod:f.bod,p_rows:rows}):sb.rpc('save_counts',{p_req:f.rid,p_rows:rows,p_send:!!send});
+const admBtns=f=>'<button class="btn" onclick="save(false)">Guardar cambios</button>'+(sentOf(f)?'<button class="btn g" onclick="reopen()">Reabrir para la bodega</button>':'');
+async function reopen(){const f=S.fill,{error}=await sb.rpc('reopen_bodega',{p_req:f.rid,p_bod:f.bod});if(error)return toast('Error: '+error.message);await refresh();render();toast(stOf(reqs[f.rid])==='open'?'Reabierta: la bodega puede modificar y volver a enviar':'Reabierta. Presiona Abrir en la solicitud para que pueda editar')}
 async function save(send){const f=S.fill;if(locked())return toast(sentOf(f)?'Ya enviaste este inventario':'La solicitud está cerrada');const n=f.rows.filter(r=>r[4]!==null).length;
  if(send&&n<f.rows.length)return toast(`Faltan ${f.rows.length-n} artículos por llenar`);
  const ch=[...f.dirty].map(i=>[f.rows[i][5],f.rows[i][4]]);try{
- for(let i=0;i<ch.length;i+=2000){const {error}=await sb.rpc('save_counts',{p_req:f.rid,p_rows:ch.slice(i,i+2000),p_send:false});if(error)throw error}
- const {error}=await sb.rpc('save_counts',{p_req:f.rid,p_rows:[],p_send:!!send});if(error)throw error;f.dirty.clear();await refresh();
+ for(let i=0;i<ch.length;i+=2000){const {error}=await call(f,ch.slice(i,i+2000),false);if(error)throw error}
+ const {error}=await call(f,[],send);if(error)throw error;f.dirty.clear();await refresh();
  toast(send?'Inventario enviado ✔':'Avance guardado ✔');if(send)render()}catch(e){toast('No se pudo guardar: '+(e.message||'intenta de nuevo'))}}
 function render(){const a=$('#app');a.innerHTML=!S.me?vLogin():S.fill?vFill():S.me.role==='admin'?vAdmin():vBod();if(S.fill&&S.fill.rows)paint()}
 const tip=e=>{const t=e.target.closest&&e.target.closest('[data-tip]'),d=$('#tip');if(!t){d.style.display='none';return}d.textContent=t.dataset.tip;d.style.display='block';d.style.left=Math.min(e.clientX+14,innerWidth-270)+'px';d.style.top=(e.clientY+16)+'px'};
