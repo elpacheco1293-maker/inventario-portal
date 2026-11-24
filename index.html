@@ -58,7 +58,7 @@ let reqs={},sm={},S={me:null,sel:null,fill:null,q:'',f:'all',lim:200,tab:'d',pw:
 const mail=id=>id.toLowerCase()+'@nexocorp-inv.com';
 const fd=t=>new Date(t).toLocaleString('es-BO',{dateStyle:'short',timeStyle:'short'});
 const stOf=r=>r.mode==='open'?'open':r.mode==='closed'?'closed':(Date.now()<new Date(r.deadline).getTime()?'open':'closed');
-const pill=r=>`<span class="pill ${stOf(r)}">${stOf(r)==='open'?'Abierta':'Cerrada'}</span>`;
+const pill=r=>`<span class="pill ${stOf(r)}">${stOf(r)==='open'?'Abierta':'Cerrada'}</span>${r.hidden&&S.me&&S.me.role==='admin'?' <span class="pill closed">Oculta a bodegas</span>':''}`;
 function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(toast.k);toast.k=setTimeout(()=>t.style.display='none',4000)}
 const ABR={lata:'LTA',unidad:'UND',caja:'CJA',frasco:'FCO',tableta:'TAB',blister:'BLI',ampolla:'AMP',sobre:'SOB',tubo:'TBO',botella:'BOT',paquete:'PQT',bolsa:'BLS',kilogramo:'KG',litro:'LT',par:'PAR',capsula:'CAP',vial:'VIA',kit:'KIT'};
 const ab=u=>{u=String(u||'').trim();return ABR[u.toLowerCase()]||u.slice(0,3).toUpperCase()};
@@ -124,7 +124,7 @@ const FLT={s:'Enviadas',p:'En curso',n:'Pendientes',sob:'Con sobrante',fal:'Con 
 const pass=(m,k)=>!k||(k==='s'?m.sent:k==='p'?(!m.sent&&m.filled>0):k==='n'?(!m.sent&&m.filled===0):k==='sob'?m.sob>0:m.fal>0);
 function vDetail(){const id=S.sel,r=reqs[id],ms=BODS.map(b=>[b,sm[id+'__'+b]]).filter(x=>x[1]),cn=k=>ms.filter(x=>pass(x[1],k)).length;
  let h=`<button class="btn g" onclick="S.sel=null;S.flt=null;render()">← Volver</button><div class="card" style="margin-bottom:18px">${pill(r)} <b>${esc(r.title)}</b><p class="m">Cierra: ${fd(r.deadline)} · Modo: ${r.mode==='open'?'abierta manual':r.mode==='closed'?'cerrada manual':'automático'}</p>
- <button class="btn" onclick="setMode('open')">Abrir</button><button class="btn r" onclick="setMode('closed')">Cerrar</button><button class="btn g" onclick="setMode('auto')">Automático</button><button class="btn g" onclick="exportX()">Exportar Excel</button><button class="btn r" onclick="del()">Eliminar solicitud</button>
+ <button class="btn" onclick="setMode('open')">Abrir</button><button class="btn r" onclick="setMode('closed')">Cerrar</button><button class="btn g" onclick="setMode('auto')">Automático</button><button class="btn g" onclick="exportX()">Exportar Excel</button><button class="btn g" onclick="toggleHide()">${r.hidden?'Mostrar a bodegas':'Ocultar a bodegas'}</button><button class="btn r" onclick="del()">Eliminar solicitud</button>
  <div class="row"><input id="nd" type="datetime-local"><button class="btn g" onclick="setDl()">Cambiar fecha límite</button></div></div>
  <div class="card" style="margin-bottom:18px"><div class="row" style="align-items:flex-start;gap:24px">${donut(id,190)}<div style="flex:1;min-width:240px"><h3>Respuestas por hora</h3>${hours(id)}</div><div>${legend(id)}</div></div></div>
  <div class="row"><button class="btn g" onclick="S.open=!S.open;render()">${S.open?'▾':'▸'} Bodegas (${ms.length})</button>${['s','p','n','sob','fal'].map(k=>`<button class="btn ${S.flt===k?'':'g'}" onclick="setFlt('${k}')">${FLT[k]} ${cn(k)}</button>`).join('')}${S.flt?'<button class="btn g" onclick="setFlt(null)">Ver todas</button>':''}</div>`;
@@ -134,6 +134,7 @@ function vDetail(){const id=S.sel,r=reqs[id],ms=BODS.map(b=>[b,sm[id+'__'+b]]).f
  return h}
 async function setMode(m){await sb.from('requests').update({mode:m}).eq('id',S.sel);await refresh();render()}
 async function setDl(){const t=new Date($('#nd').value);if(isNaN(t))return toast('Elige fecha y hora');await sb.from('requests').update({deadline:t.toISOString(),mode:'auto'}).eq('id',S.sel);await refresh();render()}
+async function toggleHide(){const r=reqs[S.sel],{error}=await sb.from('requests').update({hidden:!r.hidden}).eq('id',S.sel);if(error)return toast('Error: '+error.message);await refresh();render();toast(r.hidden?'Ahora las bodegas la ven':'Oculta: las bodegas ya no la ven')}
 async function del(){if(!confirm('¿Eliminar esta solicitud y TODOS sus datos? No se puede deshacer.'))return;toast('Eliminando…');
  const {error}=await sb.rpc('delete_request',{p_req:S.sel});if(error)return toast('Error: '+error.message);S.sel=null;await refresh();render();toast('Solicitud eliminada y espacio liberado')}
 async function create(){const t=$('#nt').value.trim(),d=new Date($('#nd').value),f=$('#nf').files[0];if(!t||isNaN(d)||!f)return toast('Completa título, fecha límite y archivo');
@@ -151,7 +152,7 @@ async function exportX(){const id=S.sel,r=reqs[id];toast('Preparando Excel…');
  const out=[['Solicitud','Bodega','Tienda','Artículo','Descripción','UOM','Sistema','Físico','Diferencia']];
  d.forEach(x=>out.push([r.title,x.bodega,(r.names||{})[x.bodega]||'',x.articles.codigo,x.articles.descripcion,x.articles.uom,Number(x.sistema),x.fisico==null?'':Number(x.fisico),x.fisico==null?'':x.fisico-x.sistema]));
  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(out),'Inventario');XLSX.writeFile(wb,'inventario_'+r.title.replace(/[^\w]+/g,'_')+'.xlsx')}catch(e){toast('Error exportando')}}
-function vBod(){let h=head()+'<div class="grid stage">';const ids=Object.keys(reqs).filter(id=>sm[id+'__'+S.me.id]&&(reqs[id].mode==='open'||Date.now()<new Date(reqs[id].deadline).getTime()+864e5));
+function vBod(){let h=head()+'<div class="grid stage">';const ids=Object.keys(reqs).filter(id=>sm[id+'__'+S.me.id]&&!reqs[id].hidden&&(reqs[id].mode==='open'||Date.now()<new Date(reqs[id].deadline).getTime()+864e5));
  if(!ids.length)h+='<p class="m">No tienes solicitudes asignadas.</p>';
  for(const id of ids){const r=reqs[id],m=sm[id+'__'+S.me.id];h+=`<div class="card tilt click" onclick="openFill('${id}','${S.me.id}')">${pill(r)} ${m.sent?'<span class="pill open">Enviada</span>':''}<h3>${esc(r.title)}</h3><p class="m">Cierra: ${fd(r.deadline)}</p><div class="bar"><i style="width:${m.filled/(m.total||1)*100}%"></i></div><p style="margin:0">${m.filled}/${m.total} artículos llenos</p></div>`}
  return h+'</div>'}
